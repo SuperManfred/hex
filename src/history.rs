@@ -365,14 +365,33 @@ impl HistoryStore {
     /// processing profile. Newest first and bounded.
     pub fn search(&self, query: &str, now_ms: u64) -> Vec<&HistoryEntry> {
         let needle = query.trim().to_lowercase();
+        self.visible(now_ms)
+            .filter(|entry| needle.is_empty() || entry.matches(&needle))
+            .take(MAX_SEARCH_RESULTS)
+            .collect()
+    }
+
+    /// Entries within retention at `now_ms`, newest first, so nothing
+    /// expired shows while it waits for disk cleanup.
+    fn visible(&self, now_ms: u64) -> impl Iterator<Item = &HistoryEntry> {
         let cutoff = self
             .retention
             .max_age_ms()
             .map(|max_age| now_ms.saturating_sub(max_age));
         self.entries()
-            .filter(|entry| cutoff.is_none_or(|cutoff| entry.timestamp_ms >= cutoff))
-            .filter(|entry| needle.is_empty() || entry.matches(&needle))
-            .take(MAX_SEARCH_RESULTS)
+            .filter(move |entry| cutoff.is_none_or(|cutoff| entry.timestamp_ms >= cutoff))
+    }
+
+    /// The newest `limit` entries within retention that `keep` admits.
+    pub fn recent(
+        &self,
+        limit: usize,
+        keep: impl Fn(&HistoryEntry) -> bool,
+        now_ms: u64,
+    ) -> Vec<&HistoryEntry> {
+        self.visible(now_ms)
+            .filter(|entry| keep(entry))
+            .take(limit)
             .collect()
     }
 
@@ -512,6 +531,17 @@ impl History {
     pub fn search(&self, query: &str) -> Vec<HistoryEntry> {
         self.synced()
             .search(query, now_ms())
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The newest `limit` entries within retention that `keep` admits (the
+    /// macOS menu bar's Labs › Recent dictations).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn recent(&self, limit: usize, keep: impl Fn(&HistoryEntry) -> bool) -> Vec<HistoryEntry> {
+        self.synced()
+            .recent(limit, keep, now_ms())
             .into_iter()
             .cloned()
             .collect()
@@ -660,6 +690,33 @@ mod tests {
             "reads filter without writing on the UI thread"
         );
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), UNIX_EPOCH);
+    }
+
+    #[test]
+    fn recent_lists_the_newest_visible_entries_that_the_filter_keeps() {
+        let path = temp_path("recent");
+        let day_ms = HistoryRetention::Day.max_age_ms().unwrap();
+        let mut store = HistoryStore::open(path, HistoryRetention::Day, 0);
+        store.record(draft("old"), 1_000).unwrap();
+        for (index, text) in ["one", "two", "three"].into_iter().enumerate() {
+            store.record(draft(text), 2_000 + index as u64).unwrap();
+        }
+        let texts = |entries: Vec<&HistoryEntry>| {
+            entries
+                .into_iter()
+                .map(|entry| entry.final_text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(store.recent(2, |_| true, 3_000)), ["three", "two"]);
+        assert_eq!(
+            texts(store.recent(5, |_| true, day_ms + 1_001)),
+            ["three", "two", "one"]
+        );
+        // A filtered entry makes room for the next older one.
+        assert_eq!(
+            texts(store.recent(2, |entry| entry.final_text != "three", 3_000)),
+            ["two", "one"]
+        );
     }
 
     #[test]

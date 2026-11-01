@@ -3,9 +3,10 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use color_eyre::eyre::{Result, eyre};
 use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::runtime::{AnyObject, NSObjectProtocol, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
-use objc2_app_kit::{NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem};
+use objc2_app_kit::{NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem};
 use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSSize, NSString};
 
 use crate::app_settings::AppSettings;
@@ -16,6 +17,12 @@ use crate::transcription::preparation::PreparationStatus;
 const IDLE_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/menubar-idle@2x.png");
 const RECORDING_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/menubar-recording@2x.png");
 const STATUS_ICON_POINTS: f64 = 18.0;
+/// How many dictations Labs › Recent dictations lists.
+pub const RECENT_DICTATIONS: usize = 5;
+
+/// What the menu lists for Labs › Recent dictations, read as the menu
+/// opens; `None` while nothing is listed (the toggle off, no History).
+pub type RecentSource = Box<dyn Fn() -> Vec<crate::history::HistoryEntry>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatusItemAction {
@@ -24,6 +31,9 @@ pub enum StatusItemAction {
     SelectModel(TranscriptionModelId),
     CancelModelPreparation,
     PasteLast,
+    /// Copy the `n`th listed recent dictation (Labs › Recent dictations);
+    /// [`recent_text`] has its text.
+    CopyRecentDictation(usize),
     StartMeeting,
     StopMeeting,
     CopyLastMeetingTranscript,
@@ -38,9 +48,10 @@ pub enum StatusItemAction {
     Quit,
 }
 
-#[derive(Debug)]
 struct StatusItemTargetIvars {
     actions: SyncSender<StatusItemAction>,
+    /// Set once the pump knows History ([`set_recent_source`]).
+    recent_source: RefCell<Option<RecentSource>>,
 }
 
 objc2::define_class!(
@@ -50,6 +61,21 @@ objc2::define_class!(
     struct StatusItemTarget;
 
     unsafe impl NSObjectProtocol for StatusItemTarget {}
+
+    unsafe impl NSMenuDelegate for StatusItemTarget {
+        /// Refreshes Copy Recent Dictation as the menu opens, so History is
+        /// read only then, never on a timer.
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, _menu: &NSMenu) {
+            let entries = self
+                .ivars()
+                .recent_source
+                .borrow()
+                .as_ref()
+                .map_or_else(Vec::new, |source| source());
+            update_recent(&entries);
+        }
+    }
 
     impl StatusItemTarget {
         #[unsafe(method(openSettings:))]
@@ -77,6 +103,16 @@ objc2::define_class!(
         #[unsafe(method(pasteLast:))]
         fn paste_last(&self, _sender: &AnyObject) {
             let _ = self.ivars().actions.try_send(StatusItemAction::PasteLast);
+        }
+
+        #[unsafe(method(copyRecentDictation:))]
+        fn copy_recent_dictation(&self, sender: &NSMenuItem) {
+            if let Ok(index) = usize::try_from(sender.tag()) {
+                let _ = self
+                    .ivars()
+                    .actions
+                    .try_send(StatusItemAction::CopyRecentDictation(index));
+            }
         }
 
         #[unsafe(method(startMeeting:))]
@@ -135,7 +171,10 @@ objc2::define_class!(
 
 impl StatusItemTarget {
     fn new(actions: SyncSender<StatusItemAction>, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(StatusItemTargetIvars { actions });
+        let this = Self::alloc(mtm).set_ivars(StatusItemTargetIvars {
+            actions,
+            recent_source: RefCell::new(None),
+        });
         unsafe { msg_send![super(this), init] }
     }
 }
@@ -156,6 +195,11 @@ struct StatusItemController {
     meeting_button: RefCell<(String, bool)>,
     update: Option<Retained<NSMenuItem>>,
     update_title: RefCell<String>,
+    /// Labs › Recent dictations: Copy Recent Dictation, hidden while the
+    /// list is empty, and one slot per dictation in its submenu.
+    recent_heading: Retained<NSMenuItem>,
+    recent_items: Vec<Retained<NSMenuItem>>,
+    recent_shown: RefCell<Vec<RecentDictation>>,
     /// A checkmark for `capture.show_overlays_in_recordings`, in builds
     /// that can capture with the experiment on.
     #[cfg(hex_capture)]
@@ -179,6 +223,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
     let (actions, receiver) = sync_channel(8);
     let target = StatusItemTarget::new(actions, mtm);
     let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Hex"));
+    menu.setDelegate(Some(ProtocolObject::from_ref(&*target)));
     let meeting_status = add_item(
         &menu,
         &target,
@@ -222,6 +267,22 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         sel!(pasteLast:),
         mtm,
     );
+    let recent_menu = NSMenu::initWithTitle(
+        NSMenu::alloc(mtm),
+        &NSString::from_str("Copy Recent Dictation"),
+    );
+    let recent_items = (0..RECENT_DICTATIONS)
+        .map(|index| {
+            let item = add_item(&recent_menu, &target, "", sel!(copyRecentDictation:), mtm);
+            item.setTag(index as isize);
+            item.setHidden(true);
+            item
+        })
+        .collect::<Vec<_>>();
+    let recent_heading = plain_item("Copy Recent Dictation", mtm);
+    recent_heading.setSubmenu(Some(&recent_menu));
+    recent_heading.setHidden(true);
+    menu.addItem(&recent_heading);
     add_item(&menu, &target, "Settings…", sel!(openSettings:), mtm);
     #[cfg(hex_capture)]
     let overlays_in_recordings = {
@@ -332,6 +393,9 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
             meeting_button: RefCell::new((String::new(), false)),
             update,
             update_title: RefCell::new("Check for Updates…".into()),
+            recent_heading,
+            recent_items,
+            recent_shown: RefCell::new(Vec::new()),
             #[cfg(hex_capture)]
             overlays_in_recordings,
             _menu: menu,
@@ -510,6 +574,95 @@ fn menu_title(title: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// One line of Labs › Recent dictations: its menu title and the text a
+/// click copies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecentDictation {
+    title: String,
+    text: String,
+}
+
+/// Whether a History entry may be listed: it has text and was pasted
+/// (Printed entries were never pasted, so Paste Last skips them too).
+pub fn lists_entry(entry: &crate::history::HistoryEntry) -> bool {
+    entry.kind != crate::history::HistoryKind::Printed && !entry.final_text.trim().is_empty()
+}
+
+/// The menu lines for `entries` (newest first, already filtered with
+/// [`lists_entry`]): each dictation on one trimmed line, at most
+/// [`RECENT_DICTATIONS`].
+fn recent_dictations(entries: &[crate::history::HistoryEntry]) -> Vec<RecentDictation> {
+    entries
+        .iter()
+        .filter(|entry| lists_entry(entry))
+        .take(RECENT_DICTATIONS)
+        .map(|entry| {
+            let one_line = entry
+                .final_text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            RecentDictation {
+                title: menu_title(&one_line),
+                text: entry.final_text.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Gives the menu what to list for Labs › Recent dictations; it is read
+/// each time the menu opens.
+pub fn set_recent_source(source: RecentSource) {
+    STATUS_ITEM.with(|controller| {
+        if let Some(controller) = controller.borrow().as_ref() {
+            controller
+                .target
+                .ivars()
+                .recent_source
+                .replace(Some(source));
+        }
+    });
+}
+
+/// The text of the `index`th listed recent dictation, as the menu showed it.
+pub fn recent_text(index: usize) -> Option<String> {
+    STATUS_ITEM.with(|controller| {
+        controller
+            .borrow()
+            .as_ref()?
+            .recent_shown
+            .borrow()
+            .get(index)
+            .map(|line| line.text.clone())
+    })
+}
+
+/// Shows the newest dictations in Copy Recent Dictation's submenu (Labs ›
+/// Recent dictations); an empty list hides the item.
+fn update_recent(entries: &[crate::history::HistoryEntry]) {
+    let recent = recent_dictations(entries);
+    STATUS_ITEM.with(|controller| {
+        let controller = controller.borrow();
+        let Some(controller) = controller.as_ref() else {
+            return;
+        };
+        let mut shown = controller.recent_shown.borrow_mut();
+        if *shown == recent {
+            return;
+        }
+        controller.recent_heading.setHidden(recent.is_empty());
+        for (index, item) in controller.recent_items.iter().enumerate() {
+            let Some(line) = recent.get(index) else {
+                item.setHidden(true);
+                continue;
+            };
+            item.setTitle(&NSString::from_str(&line.title));
+            item.setHidden(false);
+        }
+        *shown = recent;
+    });
+}
+
 fn update_title(status: &crate::desktop::host::DesktopUpdateStatus) -> String {
     use crate::desktop::host::DesktopUpdateStatus;
     match status {
@@ -669,6 +822,45 @@ mod tests {
             transcribing.status.as_deref(),
             Some("Transcribing meeting…")
         );
+    }
+
+    #[test]
+    fn recent_dictations_are_one_trimmed_line_each() {
+        use crate::history::HistoryKind;
+        let entry_of = |id, kind, text: &str| crate::history::HistoryEntry {
+            id,
+            timestamp_ms: 0,
+            kind,
+            raw_text: text.into(),
+            final_text: text.into(),
+            application: None,
+            processing: None,
+            audio_ms: 0,
+            inference_ms: 0,
+            total_ms: 0,
+        };
+        let entry = |id, text: &str| entry_of(id, HistoryKind::Dictation, text);
+        let long = "And when a user accepts a policy, the agent keeps going well past the limit";
+        let mut entries = vec![
+            entry(10, "  Let's use\nconsistent   language here.  "),
+            entry_of(9, HistoryKind::Printed, "printed, never pasted"),
+            entry(8, "   "),
+            entry(7, long),
+        ];
+        entries.extend((1..=6).rev().map(|id| entry(id, "more")));
+        assert!(!lists_entry(&entries[1]));
+        assert!(!lists_entry(&entries[2]));
+        assert!(lists_entry(&entries[3]));
+        let recent = recent_dictations(&entries);
+        assert_eq!(recent.len(), RECENT_DICTATIONS);
+        assert_eq!(recent[0].title, "Let's use consistent language here.");
+        assert_eq!(recent[0].text, "  Let's use\nconsistent   language here.  ");
+        assert_eq!(
+            recent[1].title,
+            "And when a user accepts a policy, the agent kee…"
+        );
+        assert_eq!(recent[1].text, long);
+        assert_eq!(recent[4].text, "more");
     }
 
     #[test]

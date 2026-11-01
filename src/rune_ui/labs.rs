@@ -275,6 +275,13 @@ fn rows(ui: &Ui) -> Vec<Row> {
                 tr("Tap or hold"),
                 tr("In Toggle mode, hold the shortcut to dictate until you let go; a short tap still starts and stops"),
             ));
+            // The macOS status item lists them.
+            rows.push(row(
+                Feature::RecentDictations,
+                &HINTS,
+                tr("Recent dictations in the menu bar"),
+                tr("List your last five dictations in the menu bar; click one to copy it"),
+            ));
         }
     }
     // Linux's X11 grabs and shortcuts portal take these keys alone.
@@ -400,6 +407,7 @@ fn row_key(feature: Feature) -> &'static str {
         Feature::ParakeetUltra => "lab-parakeet-ultra",
         Feature::StandaloneSpecialKeys => "lab-special-keys",
         Feature::HistoryStats => "lab-history-stats",
+        Feature::RecentDictations => "lab-recent-dictations",
     }
 }
 

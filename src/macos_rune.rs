@@ -877,6 +877,18 @@ fn start_main_thread() {
             None
         }
     };
+    // Labs › Recent dictations: read as the menu opens, never on a timer.
+    if let Some(history) = pump.runtime.history() {
+        crate::macos_rune::status_item::set_recent_source(Box::new(move || {
+            if !crate::labs::recent_dictations() {
+                return Vec::new();
+            }
+            history.recent(
+                crate::macos_rune::status_item::RECENT_DICTATIONS,
+                crate::macos_rune::status_item::lists_entry,
+            )
+        }));
+    }
     // An open window always shows the Dock icon (see [`show`]).
     crate::app_settings::set_dock_icon_visible(
         window_visible()
@@ -1078,6 +1090,11 @@ impl Pump {
                     .runtime
                     .recognition(RecognitionControl::PasteLast { reply: None });
             }
+            StatusItemAction::CopyRecentDictation(index) => {
+                let text = crate::macos_rune::status_item::recent_text(index)
+                    .ok_or_else(|| eyre!("the menu lists no dictation {index}"));
+                copy_to_clipboard(text, "a recent dictation");
+            }
             StatusItemAction::Update => {
                 if let Some(updater) = UPDATER.get()
                     && let Err(error) = update_action(&updater.menu_action())
@@ -1095,26 +1112,18 @@ impl Pump {
                     tracing::warn!(%error, "could not stop meeting from status item");
                 }
             }
-            StatusItemAction::CopyLastMeetingTranscript => {
-                let copied = crate::meeting::latest_transcript_markdown().and_then(|markdown| {
-                    arboard::Clipboard::new()?.set_text(markdown)?;
-                    Ok(())
-                });
-                if let Err(error) = copied {
-                    tracing::warn!(%error, "could not copy last meeting transcript");
-                }
-            }
+            StatusItemAction::CopyLastMeetingTranscript => copy_to_clipboard(
+                crate::meeting::latest_transcript_markdown(),
+                "last meeting transcript",
+            ),
             StatusItemAction::CopyChapter(index) => {
                 let MeetingMenuState::Recording { id, .. } = &self.meeting_state else {
                     return;
                 };
-                let copied = crate::meeting::section_for_id(id, index).and_then(|markdown| {
-                    arboard::Clipboard::new()?.set_text(markdown)?;
-                    Ok(())
-                });
-                if let Err(error) = copied {
-                    tracing::warn!(%error, "could not copy a meeting section");
-                }
+                copy_to_clipboard(
+                    crate::meeting::section_for_id(id, index),
+                    "a meeting section",
+                );
             }
             StatusItemAction::OpenMeetings => show(&self.window, Destination::Meetings(None)),
             #[cfg(hex_capture)]
@@ -1125,7 +1134,21 @@ impl Pump {
             }
         }
     }
+}
 
+/// Puts `text` on the clipboard for a menu-bar Copy item, or logs why not
+/// (`what` names the item's subject).
+fn copy_to_clipboard(text: Result<String>, what: &str) {
+    let copied = text.and_then(|text| {
+        arboard::Clipboard::new()?.set_text(text)?;
+        Ok(())
+    });
+    if let Err(error) = copied {
+        tracing::warn!(%error, "could not copy {what}");
+    }
+}
+
+impl Pump {
     /// Saves the flipped setting as the window would; the overlays and the
     /// menu item follow it from [`Pump::tick`].
     #[cfg(hex_capture)]
