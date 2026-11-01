@@ -382,14 +382,17 @@ impl HistoryStore {
             .filter(move |entry| cutoff.is_none_or(|cutoff| entry.timestamp_ms >= cutoff))
     }
 
-    /// The newest `limit` entries within retention.
-    pub fn recent(&self, limit: usize, now_ms: u64) -> Vec<&HistoryEntry> {
-        self.visible(now_ms).take(limit).collect()
-    }
-
-    /// One entry by ID, only while retention still shows it.
-    pub fn visible_entry(&self, id: u64, now_ms: u64) -> Option<&HistoryEntry> {
-        self.visible(now_ms).find(|entry| entry.id == id)
+    /// The newest `limit` entries within retention that `keep` admits.
+    pub fn recent(
+        &self,
+        limit: usize,
+        keep: impl Fn(&HistoryEntry) -> bool,
+        now_ms: u64,
+    ) -> Vec<&HistoryEntry> {
+        self.visible(now_ms)
+            .filter(|entry| keep(entry))
+            .take(limit)
+            .collect()
     }
 
     fn expire(&mut self, now_ms: u64) {
@@ -533,21 +536,15 @@ impl History {
             .collect()
     }
 
-    /// The newest `limit` entries within retention (the macOS menu bar's
-    /// Labs › Recent dictations).
+    /// The newest `limit` entries within retention that `keep` admits (the
+    /// macOS menu bar's Labs › Recent dictations).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn recent(&self, limit: usize) -> Vec<HistoryEntry> {
+    pub fn recent(&self, limit: usize, keep: impl Fn(&HistoryEntry) -> bool) -> Vec<HistoryEntry> {
         self.synced()
-            .recent(limit, now_ms())
+            .recent(limit, keep, now_ms())
             .into_iter()
             .cloned()
             .collect()
-    }
-
-    /// One entry by ID while retention still shows it.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub fn visible_entry(&self, id: u64) -> Option<HistoryEntry> {
-        self.synced().visible_entry(id, now_ms()).cloned()
     }
 
     fn synced(&self) -> std::sync::MutexGuard<'_, HistoryStore> {
@@ -696,11 +693,11 @@ mod tests {
     }
 
     #[test]
-    fn recent_lists_the_newest_visible_entries_and_finds_them_by_id() {
+    fn recent_lists_the_newest_visible_entries_that_the_filter_keeps() {
         let path = temp_path("recent");
         let day_ms = HistoryRetention::Day.max_age_ms().unwrap();
         let mut store = HistoryStore::open(path, HistoryRetention::Day, 0);
-        let old = store.record(draft("old"), 1_000).unwrap().unwrap();
+        store.record(draft("old"), 1_000).unwrap();
         for (index, text) in ["one", "two", "three"].into_iter().enumerate() {
             store.record(draft(text), 2_000 + index as u64).unwrap();
         }
@@ -710,13 +707,16 @@ mod tests {
                 .map(|entry| entry.final_text.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(texts(store.recent(2, 3_000)), ["three", "two"]);
+        assert_eq!(texts(store.recent(2, |_| true, 3_000)), ["three", "two"]);
         assert_eq!(
-            texts(store.recent(5, day_ms + 1_001)),
+            texts(store.recent(5, |_| true, day_ms + 1_001)),
             ["three", "two", "one"]
         );
-        assert!(store.visible_entry(old, 3_000).is_some());
-        assert!(store.visible_entry(old, day_ms + 1_001).is_none());
+        // A filtered entry makes room for the next older one.
+        assert_eq!(
+            texts(store.recent(2, |entry| entry.final_text != "three", 3_000)),
+            ["two", "one"]
+        );
     }
 
     #[test]

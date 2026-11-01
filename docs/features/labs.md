@@ -557,17 +557,19 @@ page goldens need regenerating on Linux with the new row.
 
 Recent dictations in the menu bar (`recent-dictations`, macOS): while on,
 the menu bar shows "Copy Recent Dictation ›" under Paste Last Dictation; its
-submenu, like Transcription Model's, lists the five newest History entries
-within retention, newest first, each on one line (whitespace collapsed, cut to
-48 characters with "…"). A click copies that entry's full final text to the
-clipboard, as History's Copy does; it never pastes. The gate is
-`labs::recent_dictations()`, read by the menu bar's one-second refresh in
-`macos_rune.rs` (off, History is not read for the menu and the section is
-hidden); the items change only when the list does. With History Off or
-empty, the item stays hidden, so the main menu is unchanged. Checks:
+submenu, like Transcription Model's, lists the five newest pasted History
+entries within retention (Printed ones, which Paste Last skips too, and
+empty ones are passed over), newest first, each on one line (whitespace
+collapsed, cut to 48 characters with "…"). A click copies that entry's full
+final text to the clipboard, as History's Copy does; it never pastes. The
+list is read from History only as the menu opens (`menuWillOpen:` in
+`status_item.rs`), never on a timer, and the gate is
+`labs::recent_dictations()`, read then (off, History is not read for the
+menu and the item is hidden). With History Off or empty, the item stays
+hidden, so the main menu is unchanged. Checks:
 `recent_dictations_are_one_trimmed_line_each` in
 [status_item.rs](../../src/macos_rune/status_item.rs) (macOS only);
-`recent_lists_the_newest_visible_entries_and_finds_them_by_id` in
+`recent_lists_the_newest_visible_entries_that_the_filter_keeps` in
 [history.rs](../../src/history.rs);
 `recent_dictations_is_its_own_bit_and_off_by_default` in
 [labs.rs](../../src/labs.rs). Not yet observed: a real Mac with the toggle
