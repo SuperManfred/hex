@@ -556,15 +556,15 @@ there is no `--snap` scene for it (the fixture has no store), and the Labs
 page goldens need regenerating on Linux with the new row.
 
 Recent dictations in the menu bar (`recent-dictations`, macOS): while on,
-the menu bar shows "Copy Recent Dictation" under Paste Last Dictation with
-the five newest History entries within retention, newest first, each on one
-line (whitespace collapsed, cut to 48 characters with "…") with a tooltip of
-up to 600 characters. A click copies that entry's full final text to the
+the menu bar shows "Copy Recent Dictation ›" under Paste Last Dictation; its
+submenu, like Transcription Model's, lists the five newest History entries
+within retention, newest first, each on one line (whitespace collapsed, cut to
+48 characters with "…"). A click copies that entry's full final text to the
 clipboard, as History's Copy does; it never pastes. The gate is
 `labs::recent_dictations()`, read by the menu bar's one-second refresh in
 `macos_rune.rs` (off, History is not read for the menu and the section is
-hidden); the menu is rebuilt only when the list changes. With History Off or
-empty, the section stays hidden. Checks:
+hidden); the items change only when the list does. With History Off or
+empty, the item stays hidden, so the main menu is unchanged. Checks:
 `recent_dictations_are_one_trimmed_line_each` in
 [status_item.rs](../../src/macos_rune/status_item.rs) (macOS only);
 `recent_lists_the_newest_visible_entries_and_finds_them_by_id` in

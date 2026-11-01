@@ -18,8 +18,6 @@ const RECORDING_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/menubar-rec
 const STATUS_ICON_POINTS: f64 = 18.0;
 /// How many dictations Labs › Recent dictations lists.
 pub const RECENT_DICTATIONS: usize = 5;
-/// The longest tooltip a recent dictation shows; the click copies it all.
-const RECENT_TOOLTIP_CHARS: usize = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatusItemAction {
@@ -172,11 +170,10 @@ struct StatusItemController {
     meeting_button: RefCell<(String, bool)>,
     update: Option<Retained<NSMenuItem>>,
     update_title: RefCell<String>,
-    /// Labs › Recent dictations: a header, one slot per dictation, and the
-    /// separator after them, all hidden while the list is empty.
-    recent_header: Retained<NSMenuItem>,
+    /// Labs › Recent dictations: Copy Recent Dictation, hidden while the
+    /// list is empty, and one slot per dictation in its submenu.
+    recent_heading: Retained<NSMenuItem>,
     recent_items: Vec<Retained<NSMenuItem>>,
-    recent_separator: Retained<NSMenuItem>,
     recent_shown: RefCell<Vec<RecentDictation>>,
     /// A checkmark for `capture.show_overlays_in_recordings`, in builds
     /// that can capture with the experiment on.
@@ -244,24 +241,21 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         sel!(pasteLast:),
         mtm,
     );
-    // An item without an action is shown disabled, as a section header.
-    let recent_header = plain_item("Copy Recent Dictation", mtm);
-    menu.addItem(&recent_header);
+    let recent_menu = NSMenu::initWithTitle(
+        NSMenu::alloc(mtm),
+        &NSString::from_str("Copy Recent Dictation"),
+    );
     let recent_items = (0..RECENT_DICTATIONS)
         .map(|_| {
-            let item = add_item(&menu, &target, "", sel!(copyRecentDictation:), mtm);
-            item.setIndentationLevel(1);
+            let item = add_item(&recent_menu, &target, "", sel!(copyRecentDictation:), mtm);
+            item.setHidden(true);
             item
         })
         .collect::<Vec<_>>();
-    let recent_separator = NSMenuItem::separatorItem(mtm);
-    menu.addItem(&recent_separator);
-    for item in recent_items
-        .iter()
-        .chain([&recent_header, &recent_separator])
-    {
-        item.setHidden(true);
-    }
+    let recent_heading = plain_item("Copy Recent Dictation", mtm);
+    recent_heading.setSubmenu(Some(&recent_menu));
+    recent_heading.setHidden(true);
+    menu.addItem(&recent_heading);
     add_item(&menu, &target, "Settings…", sel!(openSettings:), mtm);
     #[cfg(hex_capture)]
     let overlays_in_recordings = {
@@ -372,9 +366,8 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
             meeting_button: RefCell::new((String::new(), false)),
             update,
             update_title: RefCell::new("Check for Updates…".into()),
-            recent_header,
+            recent_heading,
             recent_items,
-            recent_separator,
             recent_shown: RefCell::new(Vec::new()),
             #[cfg(hex_capture)]
             overlays_in_recordings,
@@ -559,7 +552,6 @@ fn menu_title(title: &str) -> String {
 struct RecentDictation {
     id: u64,
     title: String,
-    tooltip: String,
 }
 
 /// The menu lines for `entries` (newest first): each dictation on one
@@ -579,22 +571,13 @@ fn recent_dictations(entries: &[crate::history::HistoryEntry]) -> Vec<RecentDict
             RecentDictation {
                 id: entry.id,
                 title: menu_title(&one_line),
-                tooltip: truncated_chars(entry.final_text.trim(), RECENT_TOOLTIP_CHARS),
             }
         })
         .collect()
 }
 
-fn truncated_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.into();
-    }
-    let cut = text.chars().take(max_chars - 1).collect::<String>();
-    format!("{}…", cut.trim_end())
-}
-
-/// Shows the newest dictations (Labs › Recent dictations); an empty list
-/// hides the section.
+/// Shows the newest dictations in Copy Recent Dictation's submenu (Labs ›
+/// Recent dictations); an empty list hides the item.
 pub fn update_recent(entries: &[crate::history::HistoryEntry]) {
     let recent = recent_dictations(entries);
     STATUS_ITEM.with(|controller| {
@@ -606,15 +589,13 @@ pub fn update_recent(entries: &[crate::history::HistoryEntry]) {
         if *shown == recent {
             return;
         }
-        controller.recent_header.setHidden(recent.is_empty());
-        controller.recent_separator.setHidden(recent.is_empty());
+        controller.recent_heading.setHidden(recent.is_empty());
         for (index, item) in controller.recent_items.iter().enumerate() {
             let Some(line) = recent.get(index) else {
                 item.setHidden(true);
                 continue;
             };
             item.setTitle(&NSString::from_str(&line.title));
-            item.setToolTip(Some(&NSString::from_str(&line.tooltip)));
             // Filtered to fit above.
             item.setTag(line.id as isize);
             item.setHidden(false);
@@ -809,15 +790,12 @@ mod tests {
         assert_eq!(recent.len(), RECENT_DICTATIONS);
         assert_eq!(recent[0].id, 9);
         assert_eq!(recent[0].title, "Let's use consistent language here.");
-        assert_eq!(recent[0].tooltip, "Let's use\nconsistent   language here.");
         assert_eq!(recent[1].id, 7);
         assert_eq!(
             recent[1].title,
             "And when a user accepts a policy, the agent kee…"
         );
-        assert_eq!(recent[1].tooltip, long);
         assert_eq!(recent[4].id, 4);
-        assert_eq!(truncated_chars("abcdef", 4), "abc…");
     }
 
     #[test]

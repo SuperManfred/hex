@@ -1051,7 +1051,7 @@ Cancellation / interruption / failure    // recovery
 Menu bar and Settings                    // maintenance
 ├── Icon -> 18 pt monochrome Hex mark template (recording variant + elapsed time)
 ├── Settings / Paste Last -> Reachable with Dock icon hidden
-├── Copy Recent Dictation -> Labs > Recent dictations in the menu bar (labs.md)
+├── Copy Recent Dictation › -> Labs > Recent dictations in the menu bar (labs.md)
 ├── Launch at Login -> macOS owns registration state
 ├── Check for Updates -> The updater (maintain.updates)
 └── Quit -> Orderly shutdown
