@@ -1572,7 +1572,7 @@ mod tests {
                 .is_some()
         );
         assert!(
-            crate::labs::Feature::CustomModels
+            crate::labs::Feature::BenchmarkDetails
                 .off_refusal(&settings)
                 .is_none()
         );

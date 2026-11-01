@@ -33,12 +33,6 @@ impl ImportState {
     }
 }
 
-/// Whether Labs › Use your own speech model is on.
-pub(super) fn on(ui: &Ui) -> bool {
-    let feature = crate::labs::Feature::CustomModels;
-    feature.shipped() && feature.on(&ui.settings)
-}
-
 fn wake(waker: Option<Waker>) -> impl Fn() + Send + 'static {
     move || {
         if let Some(waker) = &waker {
@@ -47,21 +41,19 @@ fn wake(waker: Option<Waker>) -> impl Fn() + Send + 'static {
     }
 }
 
-/// The header's "Add model file…" button while the Lab is on.
-pub(super) fn add_button(ui: &Ui, p: Paint) -> Option<El> {
-    on(ui).then(|| {
-        button(
-            p,
-            "add-model-file",
-            if ui.picker.import.busy() {
-                tr("Adding model…")
-            } else {
-                tr("Add model file…")
-            },
-            ButtonKind::Secondary,
-            |ui: &mut Ui, _| choose(ui),
-        )
-    })
+/// The header's "Add model file…" button.
+pub(super) fn add_button(ui: &Ui, p: Paint) -> El {
+    button(
+        p,
+        "add-model-file",
+        if ui.picker.import.busy() {
+            tr("Adding model…")
+        } else {
+            tr("Add model file…")
+        },
+        ButtonKind::Secondary,
+        |ui: &mut Ui, _| choose(ui),
+    )
 }
 
 fn choose(ui: &mut Ui) {
@@ -143,7 +135,6 @@ pub(super) fn status_note(model: &ModelDefinition) -> Option<String> {
         Status::Changed => Some(
             tr("Its file changed since it was imported. Check it again, import it again, or remove it.").into(),
         ),
-        Status::Off => Some(tr("Turn on Labs › Use your own speech model to use it.").into()),
     }
 }
 
@@ -173,9 +164,6 @@ pub(super) fn selection_notice(ui: &Ui) -> Option<String> {
         }
         Status::Changed => {
             "{model} changed since it was imported, so Hex uses {fallback} until you import it again or choose another model"
-        }
-        Status::Off => {
-            "{model} needs Labs › Use your own speech model, so Hex uses {fallback} until you turn it on or choose another model"
         }
     };
     Some(tr_named(notice, &[("model", name), ("fallback", fallback)]))

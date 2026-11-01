@@ -766,9 +766,6 @@ pub fn model_selection(
             Status::Changed => {
                 Some("its file changed since it was imported; import it again or remove it")
             }
-            Status::Off => {
-                Some("turn on Labs › Use your own speech model: hex labs on custom-models")
-            }
         };
         if let Some(why) = why {
             return Err(ControlError::new(

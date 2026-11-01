@@ -116,6 +116,8 @@ pub(super) fn open(ui: &mut Ui) {
     ui.open = None;
     ui.picker.open = true;
     ui.picker.clear_deletion();
+    // Models already on this computer: headers only, on a worker.
+    super::found::scan(ui);
     ui.picker.sort = Sort::default();
     ui.picker.supported_only = false;
 }
@@ -386,7 +388,7 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
                 .color(p.text())
                 .grow(1.0),
         )
-        .children(super::model_import::add_button(ui, p).map(|add| add.mr(8.0)))
+        .child(super::model_import::add_button(ui, p).mr(8.0))
         .child(
             IconButton::new(p.k.glyph.close)
                 .variant(IconButtonVariant::Ghost)

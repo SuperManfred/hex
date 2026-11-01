@@ -266,6 +266,10 @@ const PATHS: &[(&str, &str)] = &[
     ),
     ("onboarding", "Linux & Windows/Onboarding"),
     ("onboarding-setup", "Linux & Windows/Onboarding · setup"),
+    (
+        "onboarding-model-found",
+        "Linux & Windows/Onboarding · models on this computer",
+    ),
 ];
 
 /// Labs › Playground is on.
