@@ -184,7 +184,7 @@ pub(crate) fn file_id(metadata: &std::fs::Metadata) -> Option<u64> {
 /// One file's result, from the cache while its stamp holds.
 fn read(path: &Path, repository: &str, revision: &str) -> Option<Found> {
     let stamp = stamp(path)?;
-    let mut cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
+    let cache = CACHE.lock().unwrap_or_else(|error| error.into_inner());
     if let Some((cached, found)) = cache.files.get(path)
         && *cached == stamp
     {

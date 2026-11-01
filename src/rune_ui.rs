@@ -799,7 +799,7 @@ pub(crate) struct Ui {
     found: found::FoundState,
     /// The model onboarding's choice asked for, which the next model
     /// download prepares instead of the saved selection.
-    onboarding_choice: Option<TranscriptionSelection>,
+    onboarding_choice: Option<crate::transcription::models::TranscriptionSelection>,
     explainer: explainer::Explainer,
     sound_sets: sound_sets::SoundSets,
     tour: Option<onboarding::Tour>,
