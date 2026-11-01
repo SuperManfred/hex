@@ -577,6 +577,7 @@ Completed output                         // output
 │   └── Labs > Copy dictation only (macOS, off) -> clipboard only: no paste, typing, or restore (labs.md)
 ├── Paste Last Dictation                  // menu or Option-Shift-V / saved binding
 │   └── Last completed dictation
+├── Labs > Recent dictations in the menu bar (macOS, off) -> the five newest History entries; a click copies one (labs.md)
 └── History
     ├── Inspect / search / copy (row hover or the card) / delete
     ├── Retention ("Keep: 7 days" menu) -> Seven days by default, always hard-capped
@@ -1050,6 +1051,7 @@ Cancellation / interruption / failure    // recovery
 Menu bar and Settings                    // maintenance
 ├── Icon -> 18 pt monochrome Hex mark template (recording variant + elapsed time)
 ├── Settings / Paste Last -> Reachable with Dock icon hidden
+├── Copy Recent Dictation -> Labs > Recent dictations in the menu bar (labs.md)
 ├── Launch at Login -> macOS owns registration state
 ├── Check for Updates -> The updater (maintain.updates)
 └── Quit -> Orderly shutdown

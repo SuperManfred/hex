@@ -1045,6 +1045,14 @@ impl Pump {
                     &published.preparation,
                 );
             }
+            // Off, History is not read for the menu at all.
+            let recent = match self.runtime.history() {
+                Some(history) if crate::labs::recent_dictations() => {
+                    history.recent(crate::macos_rune::status_item::RECENT_DICTATIONS)
+                }
+                _ => Vec::new(),
+            };
+            crate::macos_rune::status_item::update_recent(&recent);
             self.model_menu_at = now + MODEL_MENU_REFRESH;
         }
         if now >= self.meeting_menu_at {
@@ -1077,6 +1085,20 @@ impl Pump {
                 let _ = self
                     .runtime
                     .recognition(RecognitionControl::PasteLast { reply: None });
+            }
+            StatusItemAction::CopyRecentDictation(id) => {
+                let copied = self
+                    .runtime
+                    .history()
+                    .and_then(|history| history.visible_entry(id))
+                    .ok_or_else(|| eyre!("that dictation is no longer in History"))
+                    .and_then(|entry| {
+                        arboard::Clipboard::new()?.set_text(entry.final_text)?;
+                        Ok(())
+                    });
+                if let Err(error) = copied {
+                    tracing::warn!(%error, "could not copy a recent dictation");
+                }
             }
             StatusItemAction::Update => {
                 if let Some(updater) = UPDATER.get()

@@ -16,6 +16,10 @@ use crate::transcription::preparation::PreparationStatus;
 const IDLE_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/menubar-idle@2x.png");
 const RECORDING_ICON_PNG: &[u8] = include_bytes!("../../assets/icons/menubar-recording@2x.png");
 const STATUS_ICON_POINTS: f64 = 18.0;
+/// How many dictations Labs › Recent dictations lists.
+pub const RECENT_DICTATIONS: usize = 5;
+/// The longest tooltip a recent dictation shows; the click copies it all.
+const RECENT_TOOLTIP_CHARS: usize = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatusItemAction {
@@ -24,6 +28,8 @@ pub enum StatusItemAction {
     SelectModel(TranscriptionModelId),
     CancelModelPreparation,
     PasteLast,
+    /// Copy the History entry with this ID (Labs › Recent dictations).
+    CopyRecentDictation(u64),
     StartMeeting,
     StopMeeting,
     CopyLastMeetingTranscript,
@@ -77,6 +83,16 @@ objc2::define_class!(
         #[unsafe(method(pasteLast:))]
         fn paste_last(&self, _sender: &AnyObject) {
             let _ = self.ivars().actions.try_send(StatusItemAction::PasteLast);
+        }
+
+        #[unsafe(method(copyRecentDictation:))]
+        fn copy_recent_dictation(&self, sender: &NSMenuItem) {
+            if let Ok(id) = u64::try_from(sender.tag()) {
+                let _ = self
+                    .ivars()
+                    .actions
+                    .try_send(StatusItemAction::CopyRecentDictation(id));
+            }
         }
 
         #[unsafe(method(startMeeting:))]
@@ -156,6 +172,12 @@ struct StatusItemController {
     meeting_button: RefCell<(String, bool)>,
     update: Option<Retained<NSMenuItem>>,
     update_title: RefCell<String>,
+    /// Labs › Recent dictations: a header, one slot per dictation, and the
+    /// separator after them, all hidden while the list is empty.
+    recent_header: Retained<NSMenuItem>,
+    recent_items: Vec<Retained<NSMenuItem>>,
+    recent_separator: Retained<NSMenuItem>,
+    recent_shown: RefCell<Vec<RecentDictation>>,
     /// A checkmark for `capture.show_overlays_in_recordings`, in builds
     /// that can capture with the experiment on.
     #[cfg(hex_capture)]
@@ -222,6 +244,24 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         sel!(pasteLast:),
         mtm,
     );
+    // An item without an action is shown disabled, as a section header.
+    let recent_header = plain_item("Copy Recent Dictation", mtm);
+    menu.addItem(&recent_header);
+    let recent_items = (0..RECENT_DICTATIONS)
+        .map(|_| {
+            let item = add_item(&menu, &target, "", sel!(copyRecentDictation:), mtm);
+            item.setIndentationLevel(1);
+            item
+        })
+        .collect::<Vec<_>>();
+    let recent_separator = NSMenuItem::separatorItem(mtm);
+    menu.addItem(&recent_separator);
+    for item in recent_items
+        .iter()
+        .chain([&recent_header, &recent_separator])
+    {
+        item.setHidden(true);
+    }
     add_item(&menu, &target, "Settings…", sel!(openSettings:), mtm);
     #[cfg(hex_capture)]
     let overlays_in_recordings = {
@@ -332,6 +372,10 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
             meeting_button: RefCell::new((String::new(), false)),
             update,
             update_title: RefCell::new("Check for Updates…".into()),
+            recent_header,
+            recent_items,
+            recent_separator,
+            recent_shown: RefCell::new(Vec::new()),
             #[cfg(hex_capture)]
             overlays_in_recordings,
             _menu: menu,
@@ -510,6 +554,75 @@ fn menu_title(title: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// One line of Labs › Recent dictations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecentDictation {
+    id: u64,
+    title: String,
+    tooltip: String,
+}
+
+/// The menu lines for `entries` (newest first): each dictation on one
+/// trimmed line, empty ones left out, at most [`RECENT_DICTATIONS`].
+fn recent_dictations(entries: &[crate::history::HistoryEntry]) -> Vec<RecentDictation> {
+    entries
+        .iter()
+        .filter(|entry| !entry.final_text.trim().is_empty())
+        .filter(|entry| isize::try_from(entry.id).is_ok())
+        .take(RECENT_DICTATIONS)
+        .map(|entry| {
+            let one_line = entry
+                .final_text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            RecentDictation {
+                id: entry.id,
+                title: menu_title(&one_line),
+                tooltip: truncated_chars(entry.final_text.trim(), RECENT_TOOLTIP_CHARS),
+            }
+        })
+        .collect()
+}
+
+fn truncated_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.into();
+    }
+    let cut = text.chars().take(max_chars - 1).collect::<String>();
+    format!("{}…", cut.trim_end())
+}
+
+/// Shows the newest dictations (Labs › Recent dictations); an empty list
+/// hides the section.
+pub fn update_recent(entries: &[crate::history::HistoryEntry]) {
+    let recent = recent_dictations(entries);
+    STATUS_ITEM.with(|controller| {
+        let controller = controller.borrow();
+        let Some(controller) = controller.as_ref() else {
+            return;
+        };
+        let mut shown = controller.recent_shown.borrow_mut();
+        if *shown == recent {
+            return;
+        }
+        controller.recent_header.setHidden(recent.is_empty());
+        controller.recent_separator.setHidden(recent.is_empty());
+        for (index, item) in controller.recent_items.iter().enumerate() {
+            let Some(line) = recent.get(index) else {
+                item.setHidden(true);
+                continue;
+            };
+            item.setTitle(&NSString::from_str(&line.title));
+            item.setToolTip(Some(&NSString::from_str(&line.tooltip)));
+            // Filtered to fit above.
+            item.setTag(line.id as isize);
+            item.setHidden(false);
+        }
+        *shown = recent;
+    });
+}
+
 fn update_title(status: &crate::desktop::host::DesktopUpdateStatus) -> String {
     use crate::desktop::host::DesktopUpdateStatus;
     match status {
@@ -669,6 +782,42 @@ mod tests {
             transcribing.status.as_deref(),
             Some("Transcribing meeting…")
         );
+    }
+
+    #[test]
+    fn recent_dictations_are_one_trimmed_line_each() {
+        let entry = |id, text: &str| crate::history::HistoryEntry {
+            id,
+            timestamp_ms: 0,
+            kind: crate::history::HistoryKind::Dictation,
+            raw_text: text.into(),
+            final_text: text.into(),
+            application: None,
+            processing: None,
+            audio_ms: 0,
+            inference_ms: 0,
+            total_ms: 0,
+        };
+        let long = "And when a user accepts a policy, the agent keeps going well past the limit";
+        let mut entries = vec![
+            entry(9, "  Let's use\nconsistent   language here.  "),
+            entry(8, "   "),
+            entry(7, long),
+        ];
+        entries.extend((1..=6).rev().map(|id| entry(id, "more")));
+        let recent = recent_dictations(&entries);
+        assert_eq!(recent.len(), RECENT_DICTATIONS);
+        assert_eq!(recent[0].id, 9);
+        assert_eq!(recent[0].title, "Let's use consistent language here.");
+        assert_eq!(recent[0].tooltip, "Let's use\nconsistent   language here.");
+        assert_eq!(recent[1].id, 7);
+        assert_eq!(
+            recent[1].title,
+            "And when a user accepts a policy, the agent kee…"
+        );
+        assert_eq!(recent[1].tooltip, long);
+        assert_eq!(recent[4].id, 4);
+        assert_eq!(truncated_chars("abcdef", 4), "abc…");
     }
 
     #[test]

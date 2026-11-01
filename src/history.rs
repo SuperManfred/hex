@@ -365,15 +365,31 @@ impl HistoryStore {
     /// processing profile. Newest first and bounded.
     pub fn search(&self, query: &str, now_ms: u64) -> Vec<&HistoryEntry> {
         let needle = query.trim().to_lowercase();
+        self.visible(now_ms)
+            .filter(|entry| needle.is_empty() || entry.matches(&needle))
+            .take(MAX_SEARCH_RESULTS)
+            .collect()
+    }
+
+    /// Entries within retention at `now_ms`, newest first, so nothing
+    /// expired shows while it waits for disk cleanup.
+    fn visible(&self, now_ms: u64) -> impl Iterator<Item = &HistoryEntry> {
         let cutoff = self
             .retention
             .max_age_ms()
             .map(|max_age| now_ms.saturating_sub(max_age));
         self.entries()
-            .filter(|entry| cutoff.is_none_or(|cutoff| entry.timestamp_ms >= cutoff))
-            .filter(|entry| needle.is_empty() || entry.matches(&needle))
-            .take(MAX_SEARCH_RESULTS)
-            .collect()
+            .filter(move |entry| cutoff.is_none_or(|cutoff| entry.timestamp_ms >= cutoff))
+    }
+
+    /// The newest `limit` entries within retention.
+    pub fn recent(&self, limit: usize, now_ms: u64) -> Vec<&HistoryEntry> {
+        self.visible(now_ms).take(limit).collect()
+    }
+
+    /// One entry by ID, only while retention still shows it.
+    pub fn visible_entry(&self, id: u64, now_ms: u64) -> Option<&HistoryEntry> {
+        self.visible(now_ms).find(|entry| entry.id == id)
     }
 
     fn expire(&mut self, now_ms: u64) {
@@ -515,6 +531,23 @@ impl History {
             .into_iter()
             .cloned()
             .collect()
+    }
+
+    /// The newest `limit` entries within retention (the macOS menu bar's
+    /// Labs › Recent dictations).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn recent(&self, limit: usize) -> Vec<HistoryEntry> {
+        self.synced()
+            .recent(limit, now_ms())
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// One entry by ID while retention still shows it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn visible_entry(&self, id: u64) -> Option<HistoryEntry> {
+        self.synced().visible_entry(id, now_ms()).cloned()
     }
 
     fn synced(&self) -> std::sync::MutexGuard<'_, HistoryStore> {
@@ -660,6 +693,30 @@ mod tests {
             "reads filter without writing on the UI thread"
         );
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), UNIX_EPOCH);
+    }
+
+    #[test]
+    fn recent_lists_the_newest_visible_entries_and_finds_them_by_id() {
+        let path = temp_path("recent");
+        let day_ms = HistoryRetention::Day.max_age_ms().unwrap();
+        let mut store = HistoryStore::open(path, HistoryRetention::Day, 0);
+        let old = store.record(draft("old"), 1_000).unwrap().unwrap();
+        for (index, text) in ["one", "two", "three"].into_iter().enumerate() {
+            store.record(draft(text), 2_000 + index as u64).unwrap();
+        }
+        let texts = |entries: Vec<&HistoryEntry>| {
+            entries
+                .into_iter()
+                .map(|entry| entry.final_text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(store.recent(2, 3_000)), ["three", "two"]);
+        assert_eq!(
+            texts(store.recent(5, day_ms + 1_001)),
+            ["three", "two", "one"]
+        );
+        assert!(store.visible_entry(old, 3_000).is_some());
+        assert!(store.visible_entry(old, day_ms + 1_001).is_none());
     }
 
     #[test]

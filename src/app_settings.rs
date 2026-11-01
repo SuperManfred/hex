@@ -1418,6 +1418,9 @@ pub struct LabsSettings {
     /// Menu, Pause, and Scroll Lock may be shortcut keys (Linux, issue 767).
     pub standalone_special_keys: bool,
     pub history_stats: bool,
+    /// The menu bar lists the last five dictations; a click copies one
+    /// (macOS).
+    pub recent_dictations: bool,
 }
 
 /// The idle times Labs › Unload model when idle offers, in minutes.
@@ -1450,6 +1453,7 @@ impl Default for LabsSettings {
             parakeet_ultra: false,
             standalone_special_keys: false,
             history_stats: false,
+            recent_dictations: false,
         }
     }
 }
