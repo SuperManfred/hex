@@ -28,6 +28,10 @@ impl FoundState {
     pub(super) fn adopting(&self) -> bool {
         self.adopting.is_some()
     }
+
+    pub(super) fn scanning(&self) -> bool {
+        self.scan.is_some()
+    }
 }
 
 fn wake(waker: Option<Waker>) -> impl Fn() + Send + 'static {
@@ -58,7 +62,7 @@ pub(super) fn scan(ui: &mut Ui) {
     }
 }
 
-/// Starts a scan the first time onboarding's model step shows.
+/// Starts a scan the first time onboarding shows.
 pub(super) fn scan_for_setup(ui: &mut Ui) {
     if !ui.found.scanned {
         scan(ui);

@@ -194,13 +194,15 @@ pub(super) fn progress(ui: &Ui) -> (bool, ModelProgress) {
 /// Feeds the flow fresh permission and model state; true when the tour
 /// changed.
 pub(super) fn poll(ui: &mut Ui) -> bool {
-    // The model step looks for models already on this computer once.
-    if ui
-        .tour
-        .as_ref()
-        .is_some_and(|tour| tour.flow.step() == Step::Setup)
-    {
+    // Onboarding looks for models already on this computer once, and holds
+    // its own download until the scan answers; with one found, the person
+    // chooses (`model_choice`), and nothing is picked for them.
+    if ui.tour.is_some() {
         super::found::scan_for_setup(ui);
+        let held = ui.found.scanning() || !ui.found_models.is_empty();
+        if let Some(tour) = &mut ui.tour {
+            tour.flow.hold_download(held);
+        }
     }
     let (installed, model) = progress(ui);
     let status = ui.platform.setup_status(installed);
@@ -1137,6 +1139,7 @@ pub(super) fn fixture(ui: &mut Ui, step: Step, downloading: bool) {
         ui.platform.caps.permissions,
         ui.platform.caps.practice_dictation,
     );
+    flow.hold_download(!ui.found_models.is_empty());
     if step != Step::Welcome {
         flow.on(Input::Continue);
     }
